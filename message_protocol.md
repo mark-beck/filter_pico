@@ -15,7 +15,6 @@
 | Magic | 4 bytes | 0xfafafaff |
 | Type | 1 byte | 0x01: Register, 0x02: Accepted, 0x03: Heartbeat, 0x04: HeartbeatResponse |
 | Length | 4 bytes | Length of the payload |
-| Payload | variable | Payload |
 
 ## Payload
 
