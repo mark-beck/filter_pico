@@ -5,6 +5,8 @@
 
 mod valve;
 mod state;
+mod messages;
+mod network;
 
 use cyw43::{Control, NetDriver};
 use cyw43_pio::PioSpi;
@@ -24,8 +26,13 @@ bind_interrupts!(struct Irqs {
     PIO0_IRQ_0 => InterruptHandler<PIO0>;
 });
 
+const SERVER_IP: embassy_net::IpAddress = embassy_net::IpAddress::Ipv4(embassy_net::Ipv4Address::new(192, 168, 36, 116));
+const SERVER_PORT: u16 = 1234;
 const WIFI_NETWORK: &str = "Pixel_9770";
 const WIFI_PASSWORD: &str = "12345678";
+
+const FIRMWARE_VERSION: u16 = 0x01;
+const TOKEN: &str = "12345678901234567890123456789012";
 
 const WATERLEVEL_FILL_START: u64 = 500;
 const WATERLEVEL_FILL_END: u64 = 50;
@@ -35,13 +42,14 @@ static STATE: Mutex<blocking_mutex::raw::CriticalSectionRawMutex, state::Context
         filter_state: state::FilterState::Idle,
         last_state_change: 0,
         waterlevel: None,
-        leak: false,
+        measurement_error: None,
+        leak: None,
     },
     config: state::Config{
         waterlevel_fill_start: WATERLEVEL_FILL_START,
         waterlevel_fill_end: WATERLEVEL_FILL_END,
-        clean_before_fill_duration: 10 * embassy_time::TICK_HZ,
-        clean_after_fill_duration: 10 * embassy_time::TICK_HZ,
+        clean_before_fill_duration: 10 * 1000,
+        clean_after_fill_duration: 10 * 1000,
         leak_protection: true,
     }
 });
@@ -81,12 +89,6 @@ async fn main(spawner: Spawner) {
         .await;
 
     let config = Config::dhcpv4(Default::default());
-    //let config = embassy_net::Config::ipv4_static(embassy_net::StaticConfigV4 {
-    //    address: Ipv4Cidr::new(Ipv4Address::new(192, 168, 69, 2), 24),
-    //    dns_servers: Vec::new(),
-    //    gateway: Some(Ipv4Address::new(192, 168, 69, 1)),
-    //});
-
     // Generate random seed
     let seed = 0x0123_4567_89ab_cdef; // chosen by fair dice roll. guarenteed to be random.
 
@@ -99,7 +101,7 @@ async fn main(spawner: Spawner) {
     ));
 
     unwrap!(spawner.spawn(net_task(stack)));
-    spawner.spawn(start_network(control, stack)).unwrap();
+    spawner.spawn(network::start_network(control, stack)).unwrap();
 
     // init led pin
     let led1 = Output::new(p.PIN_18, Level::Low);
@@ -121,40 +123,6 @@ async fn main(spawner: Spawner) {
 
     loop {
         Timer::after(Duration::from_secs(5)).await;
-    }
-}
-
-#[embassy_executor::task]
-async fn start_network(mut control: Control<'static>, stack: &'static Stack<NetDriver<'static>>) -> ! {
-    loop {
-        //control.join_open(WIFI_NETWORK).await;
-        match control.join_wpa2(WIFI_NETWORK, WIFI_PASSWORD).await {
-            Ok(_) => break,
-            Err(err) => {
-                info!("join failed with status={}", err.status);
-            }
-        }
-    }
-
-    // Wait for DHCP, not necessary when using static IP
-    info!("waiting for DHCP...");
-    while !stack.is_config_up() {
-        Timer::after(Duration::from_millis(100)).await;
-    }
-    let local_addr = stack.config_v4().unwrap().address.address();
-    info!("IP address: {:?}", local_addr);
-
-    // And now we can use it!
-
-    let mut rx_buffer = [0; 4096];
-    let mut tx_buffer = [0; 4096];
-    let mut _buf = [0; 4096];
-
-    loop {
-        let _socket = embassy_net::tcp::TcpSocket::new(&stack, &mut rx_buffer, &mut tx_buffer);
-        loop {
-            Timer::after(Duration::from_secs(1)).await;
-        }
     }
 }
 
@@ -192,11 +160,11 @@ async fn update_state(valve_controler: &mut valve::ValveControler) {
         let mut c = STATE.lock().await;
 
         // Check for leak if enabled
-        if c.config.leak_protection && c.state.leak {
+        if c.config.leak_protection && c.state.leak.is_some() {
             valve_controler.idle();
             if c.state.filter_state != state::FilterState::Idle {
                 c.state.filter_state = state::FilterState::Idle;
-                c.state.last_state_change = embassy_time::Instant::now().as_ticks();
+                c.state.last_state_change = embassy_time::Instant::now().as_millis();
             }
             return;
         }
@@ -210,51 +178,51 @@ async fn update_state(valve_controler: &mut valve::ValveControler) {
         match c.state.filter_state {
             state::FilterState::CleanBeforeFill => {
                 // check if we are done cleaning
-                if c.state.last_state_change + c.config.clean_before_fill_duration < embassy_time::Instant::now().as_ticks() {
+                if c.state.last_state_change + c.config.clean_before_fill_duration < embassy_time::Instant::now().as_millis() {
                     c.state.filter_state = state::FilterState::Fill;
-                    c.state.last_state_change = embassy_time::Instant::now().as_ticks();
+                    c.state.last_state_change = embassy_time::Instant::now().as_millis();
                 }
             },
             state::FilterState::CleanAfterFill => {
                 // check if we are done cleaning
-                if c.state.last_state_change + c.config.clean_after_fill_duration < embassy_time::Instant::now().as_ticks() {
+                if c.state.last_state_change + c.config.clean_after_fill_duration < embassy_time::Instant::now().as_millis() {
                     c.state.filter_state = state::FilterState::Idle;
-                    c.state.last_state_change = embassy_time::Instant::now().as_ticks();
+                    c.state.last_state_change = embassy_time::Instant::now().as_millis();
                 }
             },
             state::FilterState::Fill => {
                 // check if we are done filling
                 if c.state.waterlevel.unwrap() < c.config.waterlevel_fill_end {
                     c.state.filter_state = state::FilterState::CleanAfterFill;
-                    c.state.last_state_change = embassy_time::Instant::now().as_ticks();
+                    c.state.last_state_change = embassy_time::Instant::now().as_millis();
                 }   
             },
             state::FilterState::Idle => {
                 // check if we need to fill
                 if c.state.waterlevel.unwrap() > c.config.waterlevel_fill_start {
                     c.state.filter_state = state::FilterState::CleanBeforeFill;
-                    c.state.last_state_change = embassy_time::Instant::now().as_ticks();
+                    c.state.last_state_change = embassy_time::Instant::now().as_millis();
                 }
             },
             state::FilterState::ForcedFill(time) => {
                 // check if we are done filling
-                if c.state.last_state_change + time < embassy_time::Instant::now().as_ticks() {
+                if c.state.last_state_change + time < embassy_time::Instant::now().as_millis() {
                     c.state.filter_state = state::FilterState::Idle;
-                    c.state.last_state_change = embassy_time::Instant::now().as_ticks();
+                    c.state.last_state_change = embassy_time::Instant::now().as_millis();
                 }
             },
             state::FilterState::ForcedClean(time) => {
                 // check if we are done cleaning
-                if c.state.last_state_change + time < embassy_time::Instant::now().as_ticks() {
+                if c.state.last_state_change + time < embassy_time::Instant::now().as_millis() {
                     c.state.filter_state = state::FilterState::Idle;
-                    c.state.last_state_change = embassy_time::Instant::now().as_ticks();
+                    c.state.last_state_change = embassy_time::Instant::now().as_millis();
                 }
             },
             state::FilterState::ForcedIdle(time) => {
                 // check if we are done idling
-                if c.state.last_state_change + time < embassy_time::Instant::now().as_ticks() {
+                if c.state.last_state_change + time < embassy_time::Instant::now().as_millis() {
                     c.state.filter_state = state::FilterState::Idle;
-                    c.state.last_state_change = embassy_time::Instant::now().as_ticks();
+                    c.state.last_state_change = embassy_time::Instant::now().as_millis();
                 }
             },
         }
@@ -279,7 +247,10 @@ async fn measure_task(mut trig: Output<'static, PIN_17>, mut echo: Input<'static
                 let mut c = STATE.lock().await;
                 c.state.waterlevel = Some(d);
             },
-            None => (),
+            None => {
+                let mut c = STATE.lock().await;
+                c.state.measurement_error = Some(embassy_time::Instant::now().as_millis());
+            },
         }
         Timer::after(Duration::from_secs(5)).await;
     }

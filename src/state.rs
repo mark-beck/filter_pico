@@ -11,7 +11,8 @@ pub struct State {
     pub filter_state: FilterState,
     pub last_state_change: u64,
     pub waterlevel: Option<u64>,
-    pub leak: bool,
+    pub measurement_error: Option<u64>,
+    pub leak: Option<u64>,
 }
 
 #[derive(Format)]
