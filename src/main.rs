@@ -27,7 +27,7 @@ bind_interrupts!(struct Irqs {
 });
 
 const SERVER_IP: embassy_net::IpAddress = embassy_net::IpAddress::Ipv4(embassy_net::Ipv4Address::new(192, 168, 36, 116));
-const SERVER_PORT: u16 = 1234;
+const SERVER_PORT: u16 = 4040;
 const WIFI_NETWORK: &str = "Pixel_9770";
 const WIFI_PASSWORD: &str = "12345678";
 
@@ -51,7 +51,8 @@ static STATE: Mutex<blocking_mutex::raw::CriticalSectionRawMutex, state::Context
         clean_before_fill_duration: 10 * 1000,
         clean_after_fill_duration: 10 * 1000,
         leak_protection: true,
-    }
+    },
+    network_state: state::NetworkState::Disconnected,
 });
 
 #[embassy_executor::task]

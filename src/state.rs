@@ -4,6 +4,13 @@ use defmt::Format;
 pub struct Context {
     pub state: State,
     pub config: Config,
+    pub network_state: NetworkState,
+}
+
+#[derive(Format, PartialEq, Clone, Copy)]
+pub enum NetworkState {
+    Disconnected,
+    Registered,
 }
 
 #[derive(Format)]
