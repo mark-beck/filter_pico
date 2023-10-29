@@ -74,6 +74,7 @@ pub async fn start_network(
                 state::NetworkState::Registered => {
                     if let Err(e) = try_heartbeat(&mut socket).await {
                         warn!("heartbeat error: {}", e);
+                        STATE.lock().await.network_state = state::NetworkState::Disconnected;
                         Timer::after(Duration::from_secs(1)).await;
                         continue;
                     }
