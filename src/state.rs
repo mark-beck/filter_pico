@@ -7,7 +7,7 @@ pub struct Context {
     pub network_state: NetworkState,
 }
 
-#[derive(Format, PartialEq, Clone, Copy)]
+#[derive(Format, PartialEq, Eq, Clone, Copy)]
 pub enum NetworkState {
     Disconnected,
     Registered,
@@ -31,7 +31,7 @@ pub struct Config {
     pub leak_protection: bool,
 }
 
-#[derive(Format, PartialEq)]
+#[derive(Format, PartialEq, Eq)]
 pub enum FilterState {
     CleanBeforeFill,
     CleanAfterFill,
