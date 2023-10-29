@@ -5,6 +5,7 @@ pub struct Context {
     pub state: State,
     pub config: Config,
     pub network_state: NetworkState,
+    pub clock_skew: u64,
 }
 
 #[derive(Format, PartialEq, Eq, Clone, Copy)]

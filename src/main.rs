@@ -15,7 +15,7 @@ use embassy_net::{Config, Stack, StackResources};
 use embassy_rp::{
     bind_interrupts,
     gpio::{self, Input, Pin},
-    peripherals::{DMA_CH0, PIN_16, PIN_17, PIN_18, PIN_23, PIN_25, PIO0},
+    peripherals::{DMA_CH0, PIN_16, PIN_17, PIN_23, PIN_25, PIO0, PIN_11, PIN_10},
     pio::{InterruptHandler, Pio},
 };
 use embassy_sync::{blocking_mutex, mutex::Mutex};
@@ -24,7 +24,8 @@ use gpio::{Level, Output};
 use static_cell::make_static;
 use {defmt_rtt as _, panic_probe as _};
 
-type LED = PIN_18;
+type LED = PIN_11;
+type LED2 = PIN_10;
 
 bind_interrupts!(struct Irqs {
     PIO0_IRQ_0 => InterruptHandler<PIO0>;
@@ -59,6 +60,7 @@ static STATE: Mutex<blocking_mutex::raw::CriticalSectionRawMutex, state::Context
             leak_protection: true,
         },
         network_state: state::NetworkState::Disconnected,
+        clock_skew: 0,
     });
 
 #[embassy_executor::task]
@@ -124,7 +126,7 @@ async fn main(spawner: Spawner) {
         .unwrap();
 
     // init led pin
-    let led1 = Output::new(p.PIN_18, Level::Low);
+    let led1 = Output::new(p.PIN_11, Level::Low);
 
     // init ultrasonic sensor pins
     let trig = Output::new(p.PIN_17, Level::Low);
@@ -140,6 +142,9 @@ async fn main(spawner: Spawner) {
     spawner
         .spawn(blink_and_update_task(led1))
         .expect("cant spawn blink task");
+    spawner
+        .spawn(show_network_state(Output::new(p.PIN_10, Level::Low)))
+        .expect("cant spawn network_show task");
     spawner
         .spawn(state_update_task(valve_controler))
         .expect("cant spawn state update task");
@@ -161,6 +166,18 @@ async fn blink_and_update_task(mut led: Output<'static, LED>) -> ! {
     }
 }
 
+#[embassy_executor::task]
+async fn show_network_state(mut led: Output<'static, LED2>) -> ! {
+    loop {
+        if STATE.lock().await.network_state == state::NetworkState::Registered {
+            led.set_high();
+        } else {
+            led.set_low();
+        }
+        Timer::after(Duration::from_millis(50)).await;
+    }
+}
+
 fn blink<T: Pin>(led: &mut Output<'_, T>) {
     led.toggle();
 }
@@ -174,7 +191,7 @@ async fn update_serial() {
 async fn state_update_task(mut valve_controler: valve::ValveControler) -> ! {
     loop {
         update_state(&mut valve_controler).await;
-        Timer::after(Duration::from_secs(1)).await;
+        Timer::after(Duration::from_millis(500)).await;
     }
 }
 

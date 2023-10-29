@@ -72,44 +72,44 @@ pub struct Heartbeat {
 // size: 1 byte
 #[derive(Format)]
 pub struct HeartbeatResponse {
-    command_type: u8,
-    command: CommandType,
+    pub command_type: u8,
+    pub command: CommandType,
 }
 
 #[derive(Format)]
-enum CommandType {
+pub enum CommandType {
     None,
     ForceState(ForceState),
     ResyncTime(ResyncTime),
     UpdateConfig(Config),
     SetResetLeak(SetResetLeak),
-    ResetMEasurementError,
+    ResetMeasurementError,
     NewFirmware(NewFirmware),
     ResetDevice,
 }
 
 // size: 9 bytes
 #[derive(Format)]
-struct ForceState {
-    state: u8,
-    time: u64,
+pub struct ForceState {
+    pub state: u8,
+    pub time: u64,
 }
 
 // size: 8 bytes
 #[derive(Format)]
-struct ResyncTime {
-    time: u64,
+pub struct ResyncTime {
+    pub time: u64,
 }
 
 // size: 1 byte
 #[derive(Format)]
-struct SetResetLeak {
-    leak: u8,
+pub struct SetResetLeak {
+    pub leak: u8,
 }
 
 // size 10 bytes
 #[derive(Format)]
-struct NewFirmware {
+pub struct NewFirmware {
     version: u16,
     size: u64,
 }
@@ -124,7 +124,7 @@ pub fn create_heartbeat(state: &state::Context) -> Heartbeat {
     let current_time = embassy_time::Instant::now().as_millis();
     Heartbeat {
         dev_id: [0x01; 32],
-        dev_time: current_time,
+        dev_time: current_time + state.clock_skew,
         filter_state: match state.state.filter_state {
             state::FilterState::Idle => 0x00,
             state::FilterState::CleanBeforeFill => 0x01,
@@ -134,8 +134,13 @@ pub fn create_heartbeat(state: &state::Context) -> Heartbeat {
             state::FilterState::ForcedClean(_) => 0x05,
             state::FilterState::ForcedIdle(_) => 0x06,
         },
-        forced_time_left: 0,
-        last_state_change: state.state.last_state_change,
+        forced_time_left: match state.state.filter_state {
+            state::FilterState::ForcedFill(time) => time.saturating_sub(current_time - state.state.last_state_change),
+            state::FilterState::ForcedClean(time) => time.saturating_sub(current_time - state.state.last_state_change),
+            state::FilterState::ForcedIdle(time) => time.saturating_sub(current_time - state.state.last_state_change),
+            _ => 0,
+        },
+        last_state_change: state.state.last_state_change + state.clock_skew,
         waterlevel: state.state.waterlevel.unwrap_or(0),
         measurement_error: u8::from(state.state.measurement_error.unwrap_or(0) != 0),
         measurement_error_occured: 0, // TODO: implement
@@ -146,7 +151,7 @@ pub fn create_heartbeat(state: &state::Context) -> Heartbeat {
             .try_into()
             .unwrap_or(0),
         leak: u8::from(state.state.leak.is_some()),
-        leak_occured: state.state.leak.unwrap_or(0),
+        leak_occured: state.state.leak.map(|t| t  + state.clock_skew).unwrap_or(0),
     }
 }
 
@@ -326,7 +331,7 @@ fn decode_heartbeat_response(buffer: &[u8]) -> HeartbeatResponse {
         2 => CommandType::ResyncTime(decode_resync_time(&buffer[1..buffer.len() - 1])),
         3 => CommandType::UpdateConfig(decode_config(&buffer[1..buffer.len() - 1])),
         4 => CommandType::SetResetLeak(decode_set_reset_leak(&buffer[1..buffer.len() - 1])),
-        5 => CommandType::ResetMEasurementError,
+        5 => CommandType::ResetMeasurementError,
         6 => CommandType::NewFirmware(decode_new_firmware(&buffer[1..buffer.len() - 1])),
         7 => CommandType::ResetDevice,
         _ => {

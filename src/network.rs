@@ -5,6 +5,7 @@ use embassy_net::Stack;
 use embassy_time::{Duration, Timer};
 
 use crate::messages;
+use crate::messages::ForceState;
 use crate::messages::Message;
 use crate::messages::MessagePayload;
 use crate::messages::Register;
@@ -57,6 +58,7 @@ pub async fn start_network(
             // connect to server
             if let Err(e) = socket.connect(server_endpoint).await {
                 warn!("connect error: {}", e);
+                STATE.lock().await.network_state = state::NetworkState::Disconnected;
                 Timer::after(Duration::from_secs(1)).await;
                 continue;
             }
@@ -118,6 +120,57 @@ async fn try_heartbeat(socket: &mut TcpSocket<'_>) -> Result<(), NetworkError> {
     if let MessagePayload::HeartbeatResponse(resp) = message.payload {
         info!("heartbeat response");
         info!("response: {}", resp);
+        let mut state = STATE.lock().await;
+        use messages::CommandType;
+        match resp.command {
+            CommandType::None => {},
+            CommandType::ForceState(ForceState{state: 0, time}) => {
+                info!("forced idle");
+                state.state.filter_state = state::FilterState::ForcedIdle(time);
+            },
+            CommandType::ForceState(ForceState{state: 1, time}) => {
+                info!("forced clean");
+                state.state.filter_state = state::FilterState::ForcedClean(time);
+            },
+            CommandType::ForceState(ForceState{state: 2, time}) => {
+                info!("forced fill");
+                state.state.filter_state = state::FilterState::ForcedFill(time);
+            },
+            CommandType::ForceState(_) => {
+                warn!("got invalid force state command");
+            },
+            CommandType::ResyncTime(time) => {
+                info!("resync time");
+                state.clock_skew = time.time - embassy_time::Instant::now().as_millis();
+            },
+            CommandType::UpdateConfig(conf) => {
+                info!("got config update");
+                state.config = state::Config {
+                    waterlevel_fill_start: conf.waterlevel_fill_start,
+                    waterlevel_fill_end: conf.waterlevel_fill_end,
+                    clean_before_fill_duration: conf.clean_before_fill_duration,
+                    clean_after_fill_duration: conf.clean_after_fill_duration,
+                    leak_protection: conf.leak_protection == 1,
+                };
+            },
+            CommandType::SetResetLeak(leak) => {
+                if leak.leak == 1 {
+                    info!("got set leak");
+                    state.state.leak = Some(embassy_time::Instant::now().as_millis());
+                } else {
+                    info!("got reset leak");
+                    state.state.leak = None;
+                }
+            },
+            CommandType::ResetMeasurementError => {
+                info!("got reset measurement error");
+                state.state.measurement_error = None;
+            },
+            CommandType::NewFirmware(_) => warn!("got new firmware command: Unimplemented"),
+            CommandType::ResetDevice => {
+                info!("got reset device: Unimplemented");
+            }
+        }
     } else {
         warn!("wrong message type");
         return Err(NetworkError::WrongMessageType);
@@ -153,20 +206,19 @@ async fn try_register(socket: &mut TcpSocket<'_>) -> Result<(), NetworkError> {
     // read response
     let message = recv_message(socket).await?;
     if let MessagePayload::Accepted(acc) = message.payload {
-        if acc.config.is_none() {
-            warn!("config not following");
-            return Err(NetworkError::WrongMessageType);
-        }
-        info!("accepted");
-        let conf = acc.config.unwrap();
+        info!("registration accepted");
         let mut state = STATE.lock().await;
-        state.config = state::Config {
-            waterlevel_fill_start: conf.waterlevel_fill_start,
-            waterlevel_fill_end: conf.waterlevel_fill_end,
-            clean_before_fill_duration: conf.clean_before_fill_duration,
-            clean_after_fill_duration: conf.clean_after_fill_duration,
-            leak_protection: conf.leak_protection == 1,
-        };
+        state.clock_skew = acc.time - embassy_time::Instant::now().as_millis();
+        if let Some(conf) = acc.config {
+            info!("got config while registering");
+            state.config = state::Config {
+                waterlevel_fill_start: conf.waterlevel_fill_start,
+                waterlevel_fill_end: conf.waterlevel_fill_end,
+                clean_before_fill_duration: conf.clean_before_fill_duration,
+                clean_after_fill_duration: conf.clean_after_fill_duration,
+                leak_protection: conf.leak_protection == 1,
+            };
+        }
         state.network_state = state::NetworkState::Registered;
     } else {
         warn!("wrong message type");
