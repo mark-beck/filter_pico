@@ -4,6 +4,7 @@ use embassy_net::tcp::TcpSocket;
 use embassy_net::Stack;
 use embassy_time::{Duration, Timer};
 
+use crate::ID;
 use crate::messages;
 use crate::messages::ForceState;
 use crate::messages::Message;
@@ -95,13 +96,9 @@ enum NetworkError {
 }
 
 async fn try_heartbeat(socket: &mut TcpSocket<'_>) -> Result<(), NetworkError> {
-    // get token
-    let mut token = [0; 32];
-    token.copy_from_slice(TOKEN.as_bytes());
-
-    let state = STATE.lock().await;
 
     // create heartbeat message
+    let state = STATE.lock().await;
     let heartbeat = messages::create_heartbeat(&state);
     drop(state);
 
@@ -183,10 +180,12 @@ async fn try_register(socket: &mut TcpSocket<'_>) -> Result<(), NetworkError> {
     // get token
     let mut token = [0; 32];
     token.copy_from_slice(TOKEN.as_bytes());
+    let mut id = [0; 32];
+    id.copy_from_slice(ID.as_bytes());
 
     // create register message
     let register = Register {
-        dev_id: [0x01; 32],
+        dev_id: id,
         token,
         dev_type: 0x01,
         firmware_version: FIRMWARE_VERSION,

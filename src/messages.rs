@@ -122,8 +122,10 @@ struct MessageEnd {
 
 pub fn create_heartbeat(state: &state::Context) -> Heartbeat {
     let current_time = embassy_time::Instant::now().as_millis();
+    let mut id = [0x01; 32];
+    id.copy_from_slice(crate::ID.as_bytes());
     Heartbeat {
-        dev_id: [0x01; 32],
+        dev_id: id,
         dev_time: current_time + state.clock_skew,
         filter_state: match state.state.filter_state {
             state::FilterState::Idle => 0x00,
