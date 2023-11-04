@@ -9,7 +9,7 @@ mod state;
 mod valve;
 
 use cyw43_pio::PioSpi;
-use defmt::{info, unwrap};
+use defmt::{info, unwrap, warn};
 use embassy_executor::Spawner;
 use embassy_net::{Config, Stack, StackResources};
 use embassy_rp::{
@@ -48,6 +48,7 @@ static STATE: Mutex<blocking_mutex::raw::CriticalSectionRawMutex, state::Context
     Mutex::new(state::Context {
         state: state::State {
             filter_state: state::FilterState::Idle,
+            queued_state: None,
             last_state_change: 0,
             waterlevel: None,
             measurement_error: None,
@@ -140,6 +141,10 @@ async fn main(spawner: Spawner) {
     let valve4 = valve::Valve::new(Output::new(p.PIN_15, Level::Low));
     let valve_controler = valve::ValveControler::new(valve1, valve2, valve3, valve4);
 
+    {
+        STATE.lock().await.state.last_state_change = embassy_time::Instant::now().as_millis();
+    }
+
     spawner
         .spawn(blink_and_update_task(led1))
         .expect("cant spawn blink task");
@@ -214,6 +219,13 @@ async fn update_state(valve_controler: &mut valve::ValveControler) {
         return;
     }
 
+    // check if new state is queued
+    if let Some(new_state) = c.state.queued_state {
+        c.state.filter_state = new_state;
+        c.state.queued_state = None;
+        c.state.last_state_change = embassy_time::Instant::now().as_millis();
+    }
+
     // Update state
     match c.state.filter_state {
         state::FilterState::CleanBeforeFill => {
@@ -256,8 +268,11 @@ async fn update_state(valve_controler: &mut valve::ValveControler) {
             }
         }
         state::FilterState::ForcedClean(time) => {
+            let current_time = embassy_time::Instant::now().as_millis();
             // check if we are done cleaning
-            if c.state.last_state_change + time < embassy_time::Instant::now().as_millis() {
+            if c.state.last_state_change + time < current_time {
+                warn!("Forced clean done");
+                warn!("{} + {} < {}", c.state.last_state_change, time, current_time);
                 c.state.filter_state = state::FilterState::Idle;
                 c.state.last_state_change = embassy_time::Instant::now().as_millis();
             }

@@ -254,7 +254,6 @@ pub fn decode_message(buffer: &[u8]) -> Result<Message, &'static str> {
 
 fn decode_header(buffer: &[u8]) -> Result<MessageHeader, &'static str> {
     let magic = u32::from_be_bytes([buffer[0], buffer[1], buffer[2], buffer[3]]);
-    info!("magic: {}", magic);
     if magic != 0xfafafaff {
         return Err("magic does not match");
     }

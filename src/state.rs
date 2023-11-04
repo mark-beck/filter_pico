@@ -17,6 +17,7 @@ pub enum NetworkState {
 #[derive(Format)]
 pub struct State {
     pub filter_state: FilterState,
+    pub queued_state: Option<FilterState>,
     pub last_state_change: u64,
     pub waterlevel: Option<u64>,
     pub measurement_error: Option<u64>,
@@ -32,7 +33,7 @@ pub struct Config {
     pub leak_protection: bool,
 }
 
-#[derive(Format, PartialEq, Eq)]
+#[derive(Format, PartialEq, Eq, Clone, Copy)]
 pub enum FilterState {
     CleanBeforeFill,
     CleanAfterFill,

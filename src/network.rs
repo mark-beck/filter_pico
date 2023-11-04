@@ -1,4 +1,5 @@
 use cyw43::{Control, NetDriver};
+use defmt::debug;
 use defmt::{info, warn, Format};
 use embassy_net::tcp::TcpSocket;
 use embassy_net::Stack;
@@ -104,7 +105,7 @@ async fn try_heartbeat(socket: &mut TcpSocket<'_>) -> Result<(), NetworkError> {
 
     // send heartbeat message
     match send_message(socket, MessagePayload::Heartbeat(heartbeat)).await {
-        Ok(()) => info!("sent heartbeat message"),
+        Ok(()) => debug!("sent heartbeat message"),
         Err(e) => {
             warn!("send error: {}", e);
             Timer::after(Duration::from_secs(1)).await;
@@ -115,23 +116,23 @@ async fn try_heartbeat(socket: &mut TcpSocket<'_>) -> Result<(), NetworkError> {
     // read response
     let message = recv_message(socket).await?;
     if let MessagePayload::HeartbeatResponse(resp) = message.payload {
-        info!("heartbeat response");
-        info!("response: {}", resp);
+        debug!("heartbeat response");
+        debug!("response: {}", resp);
         let mut state = STATE.lock().await;
         use messages::CommandType;
         match resp.command {
             CommandType::None => {},
             CommandType::ForceState(ForceState{state: 0, time}) => {
-                info!("forced idle");
-                state.state.filter_state = state::FilterState::ForcedIdle(time);
+                info!("forced idle: {} ms", time);
+                state.state.queued_state = Some(state::FilterState::ForcedIdle(time));
             },
             CommandType::ForceState(ForceState{state: 1, time}) => {
-                info!("forced clean");
-                state.state.filter_state = state::FilterState::ForcedClean(time);
+                info!("forced clean: {} ms", time);
+                state.state.queued_state = Some(state::FilterState::ForcedClean(time));
             },
             CommandType::ForceState(ForceState{state: 2, time}) => {
-                info!("forced fill");
-                state.state.filter_state = state::FilterState::ForcedFill(time);
+                info!("forced fill: {} ms", time);
+                state.state.queued_state = Some(state::FilterState::ForcedFill(time));
             },
             CommandType::ForceState(_) => {
                 warn!("got invalid force state command");
@@ -229,7 +230,7 @@ async fn try_register(socket: &mut TcpSocket<'_>) -> Result<(), NetworkError> {
 async fn recv_message(socket: &mut TcpSocket<'_>) -> Result<Message, NetworkError> {
     let mut buf = [0; 4096];
     match socket.read(&mut buf).await {
-        Ok(n) => info!("read {} bytes", n),
+        Ok(n) => (),
         Err(e) => {
             warn!("read error: {}", e);
             return Err(NetworkError::ReadError);
@@ -248,7 +249,7 @@ async fn send_message(
         messages::encode_message(message).map_err(NetworkError::MessageError)?;
     buf.copy_from_slice(&encoded_message);
     match socket.write(&buf[0..len]).await {
-        Ok(n) => info!("wrote {} bytes", n),
+        Ok(_n) => (),
         Err(e) => {
             warn!("write error: {}", e);
             return Err(NetworkError::ReadError);
